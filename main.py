@@ -438,10 +438,24 @@ def check_shop_settings():
             problems.append(f"{name} ต้องเป็นลิงก์ที่ขึ้นต้นด้วย https:// หรือเว้นว่าง \"\"")
 
     for name in SETTING_COLORS:
+        value = getattr(settings, name, None)
+
+        # รับสีได้ทั้งแบบ 0xFF46C8 และ "#FF46C8" (แปลงเป็นตัวเลขให้)
+        if isinstance(value, str):
+            hex_text = value.strip().removeprefix("#")
+
+            try:
+                if len(hex_text) != 6:
+                    raise ValueError
+                setattr(settings, name, int(hex_text, 16))
+            except ValueError:
+                problems.append(f"{name} ต้องเป็นสีแบบ \"#RRGGBB\" หรือ 0xRRGGBB เช่น \"#FF46C8\"")
+            continue
+
         value = read(name, int)
 
         if value is not None and not 0 <= value <= 0xFFFFFF:
-            problems.append(f"{name} ต้องเป็นสีแบบ 0xRRGGBB เช่น 0xFF46C8")
+            problems.append(f"{name} ต้องเป็นสีแบบ \"#RRGGBB\" หรือ 0xRRGGBB เช่น \"#FF46C8\"")
 
     for name in SETTING_EMOJIS:
         value = read(name, str)
@@ -1087,8 +1101,8 @@ class TicketSummaryModal(discord.ui.Modal):
                     pass
 
             await channel.send(
-                "📦 **สรุป Ticket เรียบร้อยแล้ว**\n"
-                "หากต้องการลบห้อง Ticket ให้กดปุ่มด้านล่าง",
+
+                "📦 **สรุป Ticket เรียบร้อยแล้ว**\n",
                 view=DeleteTicketView()
             )
         # แจ้งผลให้แอดมิน (เห็นคนเดียว)
@@ -1783,7 +1797,6 @@ class CloseConfirmView(discord.ui.View):
         )
 
         await channel.send(
-            "เมื่อดำเนินการเรียบร้อยแล้ว กดปุ่มด้านล่างเพื่อบันทึกสรุปผล",
             view=ClosedTicketView()
         )
 
