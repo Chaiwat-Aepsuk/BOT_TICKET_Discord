@@ -108,7 +108,7 @@ SETTING_REQUIRED_TEXTS = {
 }
 
 SETTING_IDS = [
-    "TICKET_CATEGORY_ID", "CLOSED_CATEGORY_ID",
+    "GUILD_ID", "TICKET_CATEGORY_ID", "CLOSED_CATEGORY_ID",
     "SUPPORT_ROLE_ID", "LOG_CHANNEL_ID",
 ]
 
@@ -2437,7 +2437,13 @@ class ShopBot(commands.Bot):
         self.add_view(ClosedTicketView())
         self.add_view(DeleteTicketView())
         self.add_view(ReopenedTicketView())
-        # ลงทะเบียน Slash Commands
+        # ลงทะเบียน Slash Commands เฉพาะเซิร์ฟเวอร์ GUILD_ID (ขึ้นทันที ไม่ต้องรอ)
+        guild = discord.Object(id=settings.GUILD_ID)
+        self.tree.copy_global_to(guild=guild)
+        await self.tree.sync(guild=guild)
+
+        # ล้างคำสั่งแบบทุกเซิร์ฟเวอร์ (Global) ที่เคยลงทะเบียนไว้ ไม่ให้คำสั่งขึ้นซ้ำ 2 อัน
+        self.tree.clear_commands(guild=None)
         await self.tree.sync()
 
 

@@ -127,6 +127,7 @@ Heaven Ticket Shop พร้อมใช้งาน
 ### ID ห้องและ Role
 | ค่า | คืออะไร |
 |---|---|
+| `GUILD_ID` | ID เซิร์ฟเวอร์ที่ใช้บอท คำสั่ง `/ping` `/panel` ขึ้นเฉพาะเซิร์ฟเวอร์นี้ (คลิกขวาที่ชื่อเซิร์ฟเวอร์ → **Copy Server ID**) |
 | `TICKET_CATEGORY_ID` | **หมวดหลัก** ที่สร้างห้อง Ticket (ใช้กับปุ่มที่ตั้งหมวดเป็น `0`) |
 | `CLOSED_CATEGORY_ID` | หมวดที่ย้ายห้องไปเมื่อปิด Ticket (ใช้ร่วมกันทุกปุ่ม) |
 | `"category_id"` ในแต่ละสินค้า | หมวดของห้อง Ticket สินค้านั้น เช่น Support2 (`0` = หมวดหลัก) |
@@ -283,7 +284,7 @@ SUPPORT_TOPICS = [
 - [ ] ลาก **Role ของบอทให้อยู่สูงกว่า** Role ลูกค้าทั่วไปใน Server Settings → Roles
 
 ### ขั้นที่ 3: แก้ `shop_settings.py` ของร้านนั้น
-- [ ] ID 4 ค่า (`TICKET_CATEGORY_ID`, `CLOSED_CATEGORY_ID`, `SUPPORT_ROLE_ID`, `LOG_CHANNEL_ID`)
+- [ ] ID 5 ค่า (`GUILD_ID`, `TICKET_CATEGORY_ID`, `CLOSED_CATEGORY_ID`, `SUPPORT_ROLE_ID`, `LOG_CHANNEL_ID`)
 - [ ] หมวดแยกตามปุ่ม (ถ้ามี): `"category_id"` ในแต่ละสินค้า และ `SUPPORT_CATEGORY_ID` (ไม่แยก = ใส่ `0`)
 - [ ] หน้าร้าน: ชื่อร้าน คำอธิบาย เวลาทำการ รูป
 - [ ] สินค้า `PRODUCTS` ของร้านนั้น (รวม `"channel_name"` ชื่อห้อง)
@@ -316,7 +317,7 @@ SUPPORT_TOPICS = [
 | `ไม่พบ DISCORD_TOKEN ในไฟล์ .env` | ไม่มีไฟล์ `.env` หรือพิมพ์ชื่อผิด ต้องเป็น `DISCORD_TOKEN=...` |
 | `Improper token has been passed` | Token ผิดหรือถูก Reset ไปแล้ว ไปเอา Token ใหม่จาก Developer Portal |
 | แก้ไฟล์แล้วไม่เปลี่ยน | ยังไม่ได้รีสตาร์ตบอท หรือยังไม่ได้ส่ง `/panel` ใหม่ (กรณีหน้าร้าน) |
-| ไม่เห็นคำสั่ง `/panel` | รอ 1–2 นาทีหลังบอทเปิด หรือกด `Ctrl + R` รีโหลด Discord |
+| ไม่เห็นคำสั่ง `/panel` | เช็กว่า `GUILD_ID` เป็น ID ของเซิร์ฟเวอร์นี้ แล้วกด `Ctrl + R` รีโหลด Discord |
 | กดปุ่มแล้วขึ้น "การโต้ตอบล้มเหลว" | บอทปิดอยู่ หรือเป็นข้อความยืนยันเก่าก่อนรีสตาร์ต → กดปุ่มหลักใหม่ |
 | "ไม่พบ Category" / "ไม่พบ Role Support" | ID ใน `shop_settings.py` ผิด หรือหมวด / Role ถูกลบไปแล้ว |
 | "บอทไม่มีสิทธิ์…" | ให้สิทธิ์บอทตาม[หัวข้อ 7 ขั้นที่ 1](#ขั้นที่-1-สร้างบอทใหม่) และให้ Role บอทอยู่สูงพอ |

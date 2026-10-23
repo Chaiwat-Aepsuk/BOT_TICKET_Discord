@@ -17,11 +17,11 @@ python main.py                     # run the bot (needs DISCORD_TOKEN in .env)
 
 - Install dependencies: `pip install -r requirements.txt`. There is no test suite or linter.
 - Testing is manual in a Discord server: restart the bot after every edit, then walk the full lifecycle (open → Claim → Close → summary → reopen → Close again).
-- Slash commands (`/ping`, `/panel`) are globally synced in `setup_hook` on every start.
+- Slash commands (`/ping`, `/panel`) are synced only to `settings.GUILD_ID` in `setup_hook` on every start, via `copy_global_to` and `sync(guild=...)`. Global commands are then cleared, so no duplicates appear.
 
 ## Architecture
 
-**Settings file:** `shop_settings.py` is imported as `settings`. It holds the guild IDs (`TICKET_CATEGORY_ID`, `CLOSED_CATEGORY_ID`, `SUPPORT_ROLE_ID`, `LOG_CHANNEL_ID`), the `PRODUCTS` list, and every customer-facing text, image URL and color: panel, support button, review, welcome, notice, order details, and summary/DM. The owner edits this file by hand and restarts the bot. Configuration through Discord commands was tried and rejected.
+**Settings file:** `shop_settings.py` is imported as `settings`. It holds the guild IDs (`GUILD_ID`, `TICKET_CATEGORY_ID`, `CLOSED_CATEGORY_ID`, `SUPPORT_ROLE_ID`, `LOG_CHANNEL_ID`), the `PRODUCTS` list, and every customer-facing text, image URL and color: panel, support button, review, welcome, notice, order details, and summary/DM. The owner edits this file by hand and restarts the bot. Configuration through Discord commands was tried and rejected.
 - Adding a setting means adding it to `shop_settings.py` (with a Thai comment) and to the matching list in `main.py` (`SETTING_TEXT_LIMITS` / `_IDS` / `_IMAGE_URLS` / `_COLORS` / `_EMOJIS`).
 - `check_shop_settings()` runs at import. It strips `"""` padding, checks Discord length limits, URLs, colors and IDs, and raises one `RuntimeError` listing every problem.
 - Empty optional texts and URLs mean "omit". Use `value or None` for embed titles and descriptions, and `if value:` before `set_image` / `set_footer`.
