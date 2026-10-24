@@ -1,0 +1,24 @@
+# ไฟล์ตั้งค่า systemd ของบอท (setup.sh จะแทน __APP_DIR__ / __BOT_USER__ ให้เอง ไม่ต้องแก้มือ)
+[Unit]
+Description=Heaven Ticket Shop Discord Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__BOT_USER__
+WorkingDirectory=__APP_DIR__
+ExecStart=__APP_DIR__/.venv/bin/python main.py
+# บอทหยุดเพราะ Error → เปิดใหม่เองใน 10 วินาที
+Restart=on-failure
+RestartSec=10
+# ให้ข้อความ print (ภาษาไทย) ขึ้นใน journalctl ทันที
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+# ความปลอดภัย: บอทแก้ไฟล์ระบบไม่ได้ และขอสิทธิ์ root เพิ่มไม่ได้
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
