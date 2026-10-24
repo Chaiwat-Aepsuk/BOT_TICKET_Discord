@@ -182,3 +182,5 @@ cython_debug/
 
 # Claude Code (local settings)
 .claude/
+CLAUDE.md
+คู่มือ_Heaven_Ticket.md
