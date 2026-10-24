@@ -41,6 +41,7 @@ from dotenv import load_dotenv
 from datetime import datetime, timezone, timedelta
 import asyncio
 import re
+import unicodedata
 
 import shop_settings as settings
 
@@ -224,7 +225,7 @@ def check_products(problems):
         # อีโมจิต้องเป็นตัวอีโมจิจริง เช่น "💜" หรืออีโมจิของเซิร์ฟเวอร์ "<:ชื่อ:ID>"
         emoji = clean.get("button_emoji", "")
 
-        if emoji and emoji.isascii() and not emoji.startswith("<"):
+        if emoji and not is_valid_emoji(emoji):
             problems.append(f"{where}: \"button_emoji\" ต้องเป็นอีโมจิ เช่น \"💜\" หรือเว้นว่าง \"\"")
 
         if clean.get("button_color") and clean["button_color"] not in BUTTON_COLORS:
@@ -385,6 +386,60 @@ def is_valid_category_setting(value):
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
+def is_valid_emoji(value):
+    # อีโมจิที่ Discord รับได้บนปุ่ม: อีโมจิทั่วไป เช่น "💜" หรืออีโมจิของเซิร์ฟเวอร์ "<:ชื่อ:ID>"
+    # (ไม่รับตัวหนังสือหรือตัวเลข เช่น "ซื้อ", "heart")
+    if value.startswith("<"):
+        return discord.PartialEmoji.from_str(value).id is not None
+
+    # อีโมจิตัวเลข เช่น 1️⃣ #️⃣
+    if "⃣" in value:
+        return True
+
+    return (
+        any(unicodedata.category(c) == "So" for c in value)
+        and not any(
+            c.isascii() or unicodedata.category(c)[0] in "LN"
+            for c in value
+        )
+    )
+
+
+def check_embed_totals(problems):
+    # Discord รับ Embed หนึ่งอันยาวรวม (หัวข้อ + เนื้อหา + ข้อความท้าย) ได้ไม่เกิน 6000 ตัวอักษร
+    # แต่ละช่องอาจไม่เกินขีดจำกัดของตัวเอง แต่รวมกันแล้วเกินได้
+    def text(name):
+        value = getattr(settings, name, "")
+        return value if isinstance(value, str) else ""
+
+    panel_total = sum(
+        len(text(name))
+        for name in ("PANEL_TITLE", "PANEL_DESCRIPTION", "PANEL_FOOTER")
+    )
+
+    if panel_total > 6000:
+        problems.append(
+            f"หน้าร้าน (PANEL_TITLE + PANEL_DESCRIPTION + PANEL_FOOTER) "
+            f"ยาวรวม {panel_total} ตัวอักษร เกินที่ Discord รับได้ (6000)"
+        )
+
+    welcome_frame = len(text("WELCOME_TITLE")) + len(text("WELCOME_FOOTER"))
+    welcome_texts = [
+        (f"สินค้า \"{product_id}\"", product["welcome_text"])
+        for product_id, product in PRODUCTS_BY_ID.items()
+    ]
+    welcome_texts.append(("SUPPORT_WELCOME_TEXT", text("SUPPORT_WELCOME_TEXT")))
+
+    for where, welcome_text in welcome_texts:
+        total = welcome_frame + len(welcome_text)
+
+        if total > 6000:
+            problems.append(
+                f"{where}: ข้อความต้อนรับ (WELCOME_TITLE + ข้อความต้อนรับ + WELCOME_FOOTER) "
+                f"ยาวรวม {total} ตัวอักษร เกินที่ Discord รับได้ (6000)"
+            )
+
+
 def check_shop_settings():
     problems = []
 
@@ -461,7 +516,11 @@ def check_shop_settings():
         value = read(name, str)
 
         if value is not None:
-            setattr(settings, name, value.strip())
+            value = value.strip()
+            setattr(settings, name, value)
+
+            if value and not is_valid_emoji(value):
+                problems.append(f"{name} ต้องเป็นอีโมจิ เช่น \"🔴\" หรือเว้นว่าง \"\"")
 
     if isinstance(getattr(settings, "ORDER_FIELD_PRODUCT", None), str):
         check_products(problems)
@@ -473,6 +532,8 @@ def check_shop_settings():
         == getattr(settings, "SUPPORT_FIELD_DETAILS", None)
     ):
         problems.append("SUPPORT_FIELD_TOPIC กับ SUPPORT_FIELD_DETAILS ต้องไม่ซ้ำกัน")
+
+    check_embed_totals(problems)
 
     if problems:
         raise RuntimeError(
@@ -656,7 +717,10 @@ def add_answer_fields(embed, answers, name_prefix="", new_lines=False):
         # แบ่งพื้นที่ที่เหลือให้ช่องที่ยังไม่ได้ใส่เท่า ๆ กัน
         share = (remaining - len(name)) // (len(items) - index)
         value_limit = max(10, min(1024, share) - fence_length)
-        value = fence.format(shorten(answer, value_limit))
+        # แทรกตัวอักษรที่มองไม่เห็นหลัง ` ป้องกันลูกค้าพิมพ์ ``` เพื่อออกจากกรอบ
+        # แล้วแทรกลิงก์หลอกหรือจัดรูปแบบข้อความเอง (หน้าตาข้อความยังเหมือนเดิม)
+        safe_answer = answer.replace("`", "`​")
+        value = fence.format(shorten(safe_answer, value_limit))
 
         embed.add_field(name=name, value=value, inline=False)
         remaining -= len(name) + len(value)
@@ -966,11 +1030,19 @@ class TicketSummaryModal(discord.ui.Modal):
             inline=False
         )
 
-        # บันทึกสรุปลงใน Ticket ก่อน
-        await channel.send(
-            embed=summary_embed,
-            allowed_mentions=discord.AllowedMentions.none()
-        )
+        # บันทึกสรุปลงใน Ticket ก่อน (ถ้าไม่สำเร็จ แจ้งแอดมิน ไม่ให้ค้าง "กำลังคิด")
+        try:
+            await channel.send(
+                embed=summary_embed,
+                allowed_mentions=discord.AllowedMentions.none()
+            )
+        except discord.HTTPException as error:
+            print(f"บันทึกสรุปใน Ticket ไม่สำเร็จ: {error}")
+            await interaction.followup.send(
+                f"❌ บันทึกสรุปในห้อง Ticket ไม่สำเร็จ กรุณาลองใหม่: {error}",
+                ephemeral=True
+            )
+            return
 
         # ดึงรายละเอียดคำสั่งซื้อจาก Embed เดิมในห้อง Ticket
         order_details = "ไม่พบรายละเอียดคำสั่งซื้อเดิม"
@@ -1240,16 +1312,16 @@ class DeleteTicketView(discord.ui.View):
             )
             return
 
-        # ย้ายกลับ Category เดิมและซิงก์ Permission กับหมวดหมู่
+        # ย้ายกลับ Category เดิม โดยคงสิทธิ์ของห้องไว้ (ไม่ซิงก์กับหมวด)
+        # เพื่อให้ห้องยังซ่อนจาก @everyone และ Role Support ยังเห็น แม้หมวดจะตั้งสิทธิ์ไว้ต่างกัน
         # ไม่แก้ชื่อห้องและ Topic เพื่อไม่ให้ติด Rate Limit
         try:
             await channel.edit(
                 category=open_category,
-                sync_permissions=True,
                 reason=f"Ticket reopened by {interaction.user}"
             )
 
-            # คืนสิทธิ์ให้ลูกค้าดูและส่งข้อความได้
+            # คืนสิทธิ์ให้ลูกค้าเหมือนตอนสร้างห้อง (ดู ส่งข้อความ แนบไฟล์ได้)
             await channel.set_permissions(
                 owner,
                 overwrite=discord.PermissionOverwrite(
@@ -1257,7 +1329,9 @@ class DeleteTicketView(discord.ui.View):
                     read_message_history=True,
                     send_messages=True,
                     send_messages_in_threads=True,
-                    add_reactions=True
+                    add_reactions=True,
+                    attach_files=True,
+                    embed_links=True
                 ),
                 reason=f"Ticket reopened by {interaction.user}"
             )
@@ -1711,15 +1785,10 @@ class CloseConfirmView(discord.ui.View):
         if owner is None:
             try:
                 owner = await interaction.guild.fetch_member(self.owner_id)
-            except discord.NotFound:
+            except discord.HTTPException:
+                # ลูกค้าออกจากเซิร์ฟเวอร์แล้ว (หรือดึงข้อมูลไม่ได้) ยังปิด Ticket ต่อได้
+                # เพียงแต่ข้ามขั้นล็อกสิทธิ์ลูกค้า
                 owner = None
-
-        if owner is None:
-            await interaction.followup.send(
-                "❌ ไม่พบเจ้าของ Ticket จึงไม่สามารถล็อกสิทธิ์ได้",
-                ephemeral=True
-            )
-            return
 
         # ตรวจสอบ Category ปลายทาง
         closed_category = interaction.guild.get_channel(
@@ -1734,19 +1803,20 @@ class CloseConfirmView(discord.ui.View):
             return
 
         try:
-            await channel.set_permissions(
-                owner,
-                overwrite=discord.PermissionOverwrite(
-                    view_channel=True,
-                    read_message_history=True,
-                    send_messages=False,
-                    send_messages_in_threads=False,
-                    create_public_threads=False,
-                    create_private_threads=False,
-                    add_reactions=False
-                ),
-                reason=f"Ticket closed by {interaction.user}"
-            )
+            if owner is not None:
+                await channel.set_permissions(
+                    owner,
+                    overwrite=discord.PermissionOverwrite(
+                        view_channel=True,
+                        read_message_history=True,
+                        send_messages=False,
+                        send_messages_in_threads=False,
+                        create_public_threads=False,
+                        create_private_threads=False,
+                        add_reactions=False
+                    ),
+                    reason=f"Ticket closed by {interaction.user}"
+                )
 
             # ย้าย Ticket ไปหมวด CLOSED TICKETS (หมวดนี้คือสถานะปิด)
             # ไม่แก้ชื่อห้องและ Topic เพื่อไม่ให้ติด Rate Limit
@@ -1770,38 +1840,60 @@ class CloseConfirmView(discord.ui.View):
             return
 
         # ปิดเฉพาะปุ่มควบคุม Ticket ที่มีอยู่เดิม
-        async for message in channel.history(limit=50):
-            if message.author != interaction.client.user or not message.components:
-                continue
+        # ค้นทั้งห้อง (ปุ่มชุดแรกอยู่ข้อความแรกของห้อง ห้องที่คุยยาวจะเกิน 50 ข้อความ)
+        try:
+            async for message in channel.history(limit=None):
+                if message.author != interaction.client.user or not message.components:
+                    continue
 
-            # ปิดเฉพาะข้อความที่มีปุ่ม Close Ticket (ทั้งชุดแรกและชุดเปิดใหม่) หรือ Claim
-            has_ticket_controls = any(
-                getattr(component, "custom_id", None)
-                in (
-                    "heaven:close_ticket",
-                    "heaven:claim_ticket",
-                    "heaven:reopened_close_ticket"
+                # ปิดเฉพาะข้อความที่มีปุ่ม Close Ticket (ทั้งชุดแรกและชุดเปิดใหม่) หรือ Claim
+                has_ticket_controls = any(
+                    getattr(component, "custom_id", None)
+                    in (
+                        "heaven:close_ticket",
+                        "heaven:claim_ticket",
+                        "heaven:reopened_close_ticket"
+                    )
+                    for row in message.components
+                    for component in row.children
                 )
-                for row in message.components
-                for component in row.children
+
+                if has_ticket_controls:
+                    try:
+                        await message.edit(view=None)
+                    except discord.HTTPException:
+                        pass
+        except discord.HTTPException as error:
+            # เอาปุ่มเดิมออกไม่ได้ ไม่เป็นไร ทำขั้นต่อไปต่อ (ปุ่มเดิมจะตรวจสถานะปิดเอง)
+            print(f"เอาปุ่มเดิมออกไม่สำเร็จ: {error}")
+
+        # แจ้งว่าปิด Ticket แล้ว และส่งปุ่ม "สรุปข้อมูล"
+        # (ถ้าส่งไม่ได้ ต้องแจ้งแอดมิน ไม่เช่นนั้นห้องจะค้าง)
+        try:
+            await channel.send(
+                f"🔒 Ticket ถูกปิดโดย {interaction.user.mention}\n"
+                "ห้องนี้ถูกล็อกไม่ให้ลูกค้าส่งข้อความเพิ่มเติม"
             )
 
-            if has_ticket_controls:
-                await message.edit(view=None)
+            await channel.send(
+                view=ClosedTicketView()
+            )
+        except discord.HTTPException as error:
+            print(f"ส่งปุ่มสรุปข้อมูลไม่สำเร็จ: {error}")
+            await interaction.followup.send(
+                "⚠️ ปิด Ticket แล้ว แต่ส่งปุ่ม \"สรุปข้อมูล\" ไม่สำเร็จ "
+                f"กรุณาตรวจสอบสิทธิ์ของบอทในห้องนี้: {error}",
+                ephemeral=True
+            )
+            return
 
-        # แจ้งว่าปิด Ticket แล้ว
+        result_text = "✅ ปิด Ticket เรียบร้อยแล้ว"
 
-        await channel.send(
-            f"🔒 Ticket ถูกปิดโดย {interaction.user.mention}\n"
-            "ห้องนี้ถูกล็อกไม่ให้ลูกค้าส่งข้อความเพิ่มเติม"
-        )
-
-        await channel.send(
-            view=ClosedTicketView()
-        )
+        if owner is None:
+            result_text += "\n⚠️ ไม่พบลูกค้าในเซิร์ฟเวอร์ (อาจออกไปแล้ว) จึงข้ามการล็อกสิทธิ์"
 
         await interaction.followup.send(
-            "✅ ปิด Ticket เรียบร้อยแล้ว",
+            result_text,
             ephemeral=True
         )
 
@@ -2031,6 +2123,14 @@ class TicketControlView(discord.ui.View):
             )
             return
 
+        # Ticket ที่ปิดแล้ว Claim ไม่ได้ (ปุ่มเดิมอาจยังค้างอยู่ในห้อง)
+        if is_ticket_closed(channel):
+            await interaction.response.send_message(
+                "⚠️ Ticket นี้ถูกปิดไปแล้วครับ",
+                ephemeral=True
+            )
+            return
+
         # ตรวจสอบว่าเคยมีคน Claim แล้วหรือยัง
         if is_ticket_claimed(channel):
             await interaction.response.send_message(
@@ -2042,6 +2142,9 @@ class TicketControlView(discord.ui.View):
         # บันทึกผู้รับผิดชอบต่อท้าย Topic เดิม เช่น "... · 🙋 @แอดมิน"
         new_topic = build_claimed_topic(topic, interaction.user.id)
 
+        # ตอบ Discord ทันที ป้องกันปุ่มหมดเวลา 3 วินาทีระหว่างแก้ Topic
+        await interaction.response.defer()
+
         try:
             await channel.edit(
                 topic=new_topic,
@@ -2052,7 +2155,7 @@ class TicketControlView(discord.ui.View):
             button.label = f"Claimed: {interaction.user.display_name}"
             button.disabled = True
 
-            await interaction.response.edit_message(view=self)
+            await interaction.edit_original_response(view=self)
 
             await interaction.followup.send(
                 f"✅ คุณรับผิดชอบ Ticket นี้แล้ว: {channel.mention}",
@@ -2060,14 +2163,14 @@ class TicketControlView(discord.ui.View):
             )
 
         except discord.Forbidden:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Bot ไม่มีสิทธิ์แก้ไขห้อง Ticket",
                 ephemeral=True
             )
 
         except discord.HTTPException as error:
             print(f"Claim ticket error: {error}")
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Claim Ticket ไม่สำเร็จ กรุณาตรวจสอบ Terminal",
                 ephemeral=True
             )
@@ -2192,6 +2295,10 @@ class OrderConfirmView(discord.ui.View):
         # ตอบ Interaction ก่อนเริ่มสร้างห้อง
         await interaction.response.defer(ephemeral=True)
 
+        # ใช้ตอนเกิดข้อผิดพลาด: ลบห้องที่สร้างค้างไว้ถ้ายังส่งข้อความไม่ครบ
+        channel = None
+        ticket_ready = False
+
         try:
             # ชื่อห้อง เช่น nitro-heaven / Topic เช่น "👤 @ลูกค้า · 📦 nitro"
             channel = await interaction.guild.create_text_channel(
@@ -2266,6 +2373,8 @@ class OrderConfirmView(discord.ui.View):
 
             await channel.send(embed=order_embed)
 
+            # ห้องพร้อมใช้งานครบแล้ว (หลังจากนี้ถ้ามีข้อผิดพลาดจะไม่ลบห้อง)
+            ticket_ready = True
 
             await interaction.edit_original_response(
     content=f"✅ สร้าง Ticket สำเร็จแล้ว: {channel.mention}",
@@ -2275,18 +2384,33 @@ class OrderConfirmView(discord.ui.View):
 
             self.stop()
 
-        except discord.Forbidden:
-            await interaction.followup.send(
-                "❌ Bot ไม่มีสิทธิ์สร้างห้องหรือกำหนด Permission",
-                ephemeral=True
-            )
-
         except discord.HTTPException as error:
             print(f"Ticket creation error: {error}")
-            await interaction.followup.send(
-                "❌ สร้าง Ticket ไม่สำเร็จ กรุณาตรวจสอบ Terminal",
-                ephemeral=True
-            )
+
+            if ticket_ready:
+                # ห้องสร้างครบแล้ว แค่แก้ข้อความ "สร้างสำเร็จ" ไม่ได้ ไม่ต้องลบห้อง
+                return
+
+            # ห้องถูกสร้างแต่ส่งข้อความไม่ครบ (ไม่มีปุ่ม Close) ลบทิ้ง
+            # เพื่อไม่ให้ห้องค้าง และไม่ให้ลูกค้าติดกฎ 1 คนต่อ 1 Ticket
+            if channel is not None:
+                try:
+                    await channel.delete(reason="สร้าง Ticket ไม่สำเร็จ")
+                except discord.HTTPException:
+                    pass
+
+            # ให้ลูกค้ากดยืนยันใหม่ได้
+            self.started = False
+
+            if isinstance(error, discord.Forbidden):
+                error_text = "❌ Bot ไม่มีสิทธิ์สร้างห้องหรือกำหนด Permission"
+            else:
+                error_text = "❌ สร้าง Ticket ไม่สำเร็จ กรุณาตรวจสอบ Terminal"
+
+            try:
+                await interaction.followup.send(error_text, ephemeral=True)
+            except discord.HTTPException:
+                pass
 
         finally:
             creating_ticket_users.discard(interaction.user.id)
@@ -2501,14 +2625,23 @@ async def panel(interaction: discord.Interaction):
     if settings.PANEL_IMAGE_URL:
         embed.set_image(url=settings.PANEL_IMAGE_URL)
 
+    # ส่งหน้าร้านก่อน แล้วค่อยแจ้งผลตามจริง
+    try:
+        await interaction.channel.send(
+            embed=embed,
+            view=ShopPanelView()
+        )
+    except discord.HTTPException as error:
+        print(f"ส่งหน้าร้านไม่สำเร็จ: {error}")
+        await interaction.response.send_message(
+            f"❌ ส่งหน้าร้านไม่สำเร็จ กรุณาตรวจสอบสิทธิ์ของบอทในห้องนี้: {error}",
+            ephemeral=True
+        )
+        return
+
     await interaction.response.send_message(
         "✅ สร้างหน้าร้านเรียบร้อยแล้ว",
         ephemeral=True
-    )
-
-    await interaction.channel.send(
-        embed=embed,
-        view=ShopPanelView()
     )
 
 
